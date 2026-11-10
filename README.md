@@ -63,11 +63,6 @@ Header values:
 2021002   8.5  17.3   4.6   0.0   2.0 185.3  77.9
 ```
 
-## Hosting on GitHub Pages
-
-1. In the repository, go to **Settings → Pages**.
-2. Under **Build and deployment**, set **Source** to *Deploy from a branch*, then choose branch `main` and folder `/ (root)`. Click **Save**.
-3. After a minute the site is live at `https://<your-username>.github.io/<repo-name>/`.
 
 ## Notes and limitations
 
