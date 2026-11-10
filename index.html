@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NASA POWER → DSSAT Weather File Builder</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f5f1; --surface: #fcfcfb; --border: #e3e1da;
+    --text: #1b1b19; --text2: #52514e; --muted: #85837c;
+    --accent: #2f6b3a; --accent-ink: #fff;
+    --tmax: #eb6834; --tmin: #2a78d6; --rain: #2a78d6; --srad: #c98500;
+    --warn-bg: #fff4dc; --warn: #8a5a00; --err-bg: #fde8e7; --err: #a12622; --ok: #2f6b3a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #121211; --surface: #1a1a19; --border: #2e2d2a;
+      --text: #f0efec; --text2: #c3c2b7; --muted: #8f8d85;
+      --accent: #5fae6c; --accent-ink: #0e1a10;
+      --tmax: #d95926; --tmin: #3987e5; --rain: #3987e5; --srad: #c98500;
+      --warn-bg: #3a2c0c; --warn: #f0c060; --err-bg: #3d1716; --err: #ff8a85; --ok: #7fcf8b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 18px 24px 10px; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: -.01em; }
+  header p { margin: 4px 0 0; color: var(--text2); }
+  main { display: grid; grid-template-columns: 360px 1fr; gap: 16px; padding: 8px 24px 32px; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--text2); margin: 0 0 12px; font-weight: 600; }
+  label { display: block; font-size: 12px; color: var(--text2); margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  #map { height: 220px; border-radius: 8px; border: 1px solid var(--border); margin-top: 6px; }
+  button { font: inherit; cursor: pointer; border-radius: 7px; padding: 8px 14px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; width: 100%; margin-top: 14px; padding: 10px; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .checks label { display: flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--text); font-size: 13px; }
+  .checks input { width: auto; }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--text2); font-size: 12.5px; }
+  .status { margin-top: 12px; padding: 9px 11px; border-radius: 7px; font-size: 13px; display: none; }
+  .status.info { display: block; background: var(--bg); color: var(--text2); }
+  .status.warn { display: block; background: var(--warn-bg); color: var(--warn); }
+  .status.err  { display: block; background: var(--err-bg); color: var(--err); }
+  .status.ok   { display: block; background: var(--bg); color: var(--ok); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .tile .k { font-size: 11.5px; color: var(--text2); }
+  .tile .v { font-size: 22px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .tile .u { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 2px; }
+  .charts { display: grid; gap: 14px; }
+  .chartbox { position: relative; height: 230px; }
+  .chartcard h3 { margin: 0 0 6px; font-size: 14px; }
+  .chartcard .sub { font-size: 12px; color: var(--muted); margin: -4px 0 8px; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+  .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+  pre { margin: 0; font: 12px/1.4 var(--mono); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow: auto; max-height: 340px; white-space: pre; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .toolbar .grow { flex: 1; }
+  .fname { font-family: var(--mono); font-size: 13px; color: var(--text2); }
+  table.miss { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  table.miss th, table.miss td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  table.miss th { color: var(--text2); font-weight: 500; }
+  .empty { color: var(--muted); text-align: center; padding: 60px 20px; }
+  .right { display: grid; gap: 16px; align-content: start; min-width: 0; }
+  a { color: var(--accent); }
+  .drop { border: 1px dashed var(--border); border-radius: 8px; padding: 10px; font-size: 12px; color: var(--text2); margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NASA POWER → DSSAT weather file builder</h1>
+  <p>Pull daily agro-climate data for any point on Earth from NASA POWER, check it, and export DSSAT-ready <code>.WTH</code> files.</p>
+</header>
+
+<main>
+  <!-- ===== Controls ===== -->
+  <section class="card">
+    <h2>Site & period</h2>
+    <label for="siteName">Site name</label>
+    <input id="siteName" value="Experiment Station">
+
+    <div class="row">
+      <div><label for="lat">Latitude (°N)</label><input id="lat" type="number" step="0.0001" value="32.3000"></div>
+      <div><label for="lon">Longitude (°E)</label><input id="lon" type="number" step="0.0001" value="-90.1800"></div>
+    </div>
+    <div id="map"></div>
+    <div class="hint" id="mapNote">Click the map to set the point (switch Streets/Satellite at top-right). POWER cells are ~0.5° × 0.625°.</div>
+
+    <div class="row">
+      <div><label for="start">Start date</label><input id="start" type="date" value="2015-01-01"></div>
+      <div><label for="end">End date</label><input id="end" type="date" value="2024-12-31"></div>
+    </div>
+    <div class="hint">Daily POWER data start 1981-01-01; the most recent days lag by a few days to weeks.</div>
+
+    <h2 style="margin-top:18px">DSSAT output</h2>
+    <div class="row">
+      <div><label for="insi">Station code (INSI)</label><input id="insi" maxlength="4" value="NASA" style="text-transform:uppercase"></div>
+      <div><label for="split">Files</label>
+        <select id="split">
+          <option value="year">One file per year</option>
+          <option value="single">One multi-year file</option>
+        </select></div>
+    </div>
+    <div class="row">
+      <div><label for="datefmt">Date format</label>
+        <select id="datefmt">
+          <option value="7">YYYYDDD (v4.8)</option>
+          <option value="5">YYDDD (≤v4.7)</option>
+        </select></div>
+      <div><label for="gaps">Missing values</label>
+        <select id="gaps">
+          <option value="fill">Fill gaps</option>
+          <option value="keep">Keep as −99</option>
+        </select></div>
+    </div>
+
+    <label>Columns (SRAD, TMAX, TMIN, RAIN are always included)</label>
+    <div class="checks">
+      <label><input type="checkbox" id="cDEWP" checked> DEWP – dew point (°C)</label>
+      <label><input type="checkbox" id="cWIND" checked> WIND – wind run at 2 m (km/day)</label>
+      <label><input type="checkbox" id="cRHUM" checked> RHUM – relative humidity (%)</label>
+    </div>
+
+    <button class="primary" id="go">Fetch from NASA POWER</button>
+    <div id="status" class="status"></div>
+
+    <details>
+      <summary>Offline / fallback: load a POWER JSON file</summary>
+      <div class="hint" style="margin-top:6px">If your browser blocks the direct request, open the
+        <a id="apiLink" href="#" target="_blank" rel="noopener">API request URL</a>, save the JSON, and load it here.</div>
+      <div class="drop"><input type="file" id="jsonFile" accept=".json,application/json"></div>
+    </details>
+  </section>
+
+  <!-- ===== Results ===== -->
+  <section class="right">
+    <div id="emptyState" class="card empty">Set a location and period, then fetch. Charts, data checks and the DSSAT file preview will appear here.</div>
+
+    <div id="results" style="display:none">
+      <div class="tiles" id="tiles"></div>
+
+      <div class="charts">
+        <div class="card chartcard">
+          <h3>Air temperature</h3>
+          <div class="sub" id="tSub"></div>
+          <div class="legend"><span><i style="background:var(--tmax)"></i>TMAX</span><span><i style="background:var(--tmin)"></i>TMIN</span></div>
+          <div class="chartbox"><canvas id="chT"></canvas></div>
+        </div>
+        <div class="card chartcard">
+          <h3>Rainfall</h3>
+          <div class="sub" id="rSub"></div>
+          <div class="chartbox"><canvas id="chR"></canvas></div>
+        </div>
+        <div class="card chartcard">
+          <h3>Solar radiation</h3>
+          <div class="sub" id="sSub"></div>
+          <div class="chartbox"><canvas id="chS"></canvas></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h2>Data checks</h2>
+        <div id="checks"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h2>DSSAT weather file</h2>
+        <div class="toolbar">
+          <select id="filePick" style="width:auto"></select>
+          <span class="grow"></span>
+          <button id="copyBtn">Copy text</button>
+          <button id="dlOne">Download this file</button>
+          <button id="dlAll">Download all (.zip)</button>
+        </div>
+        <pre id="preview"></pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+// ======================= CORE-START (pure functions, no DOM) =======================
+const POWER_PARAMS = ["ALLSKY_SFC_SW_DWN", "T2M_MAX", "T2M_MIN", "PRECTOTCORR", "T2MDEW", "WS2M", "RH2M"];
+
+function buildPowerUrl(lat, lon, startISO, endISO) {
+  const d = s => s.replaceAll("-", "");
+  const q = new URLSearchParams({
+    parameters: POWER_PARAMS.join(","), community: "AG",
+    longitude: lon.toFixed(4), latitude: lat.toFixed(4),
+    start: d(startISO), end: d(endISO), format: "JSON", "time-standard": "LST"
+  });
+  return "https://power.larc.nasa.gov/api/temporal/daily/point?" + q.toString();
+}
+
+// Turn POWER JSON into an array of daily records with DSSAT variable names/units.
+function parsePower(json) {
+  const p = json && json.properties && json.properties.parameter;
+  if (!p) throw new Error("Response has no properties.parameter block – is this a POWER daily JSON?");
+  const fill = (json.header && json.header.fill_value != null) ? json.header.fill_value : -999;
+  const coords = (json.geometry && json.geometry.coordinates) || [];
+  const keys = Object.keys(p.T2M_MAX || p[Object.keys(p)[0]]).sort();
+  const val = (name, k) => {
+    const v = p[name] ? p[name][k] : undefined;
+    return (v == null || v === fill || v <= -990 || Number.isNaN(v)) ? null : Number(v);
+  };
+  const days = keys.map(k => {
+    const ws = val("WS2M", k);
+    return {
+      date: new Date(Date.UTC(+k.slice(0, 4), +k.slice(4, 6) - 1, +k.slice(6, 8))),
+      SRAD: val("ALLSKY_SFC_SW_DWN", k),       // MJ m-2 d-1 (AG community)
+      TMAX: val("T2M_MAX", k),                 // °C
+      TMIN: val("T2M_MIN", k),                 // °C
+      RAIN: val("PRECTOTCORR", k),             // mm d-1
+      DEWP: val("T2MDEW", k),                  // °C
+      WIND: ws == null ? null : ws * 86.4,     // m s-1 -> km d-1
+      RHUM: val("RH2M", k)                     // %
+    };
+  });
+  return { days, lon: coords[0], lat: coords[1], elev: coords[2] };
+}
+
+const VARS_ALL = ["SRAD", "TMAX", "TMIN", "RAIN", "DEWP", "WIND", "RHUM"];
+const VARS_REQ = ["SRAD", "TMAX", "TMIN", "RAIN"];
+
+function countMissing(days, vars) {
+  const out = {};
+  vars.forEach(v => out[v] = days.reduce((n, d) => n + (d[v] == null ? 1 : 0), 0));
+  return out;
+}
+
+// Trim trailing days where any required variable is missing (POWER solar latency),
+// then linearly interpolate interior gaps. Returns {days, trimmed, filled}.
+function cleanDays(days, vars) {
+  let end = days.length;
+  while (end > 0 && VARS_REQ.some(v => days[end - 1][v] == null)) end--;
+  let start = 0;
+  while (start < end && VARS_REQ.some(v => days[start][v] == null)) start++;
+  const out = days.slice(start, end).map(d => ({ ...d }));
+  const filled = {};
+  vars.forEach(v => {
+    filled[v] = 0;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i][v] != null) continue;
+      let a = i - 1; while (a >= 0 && out[a][v] == null) a--;
+      let b = i + 1; while (b < out.length && out[b][v] == null) b++;
+      const va = a >= 0 ? out[a][v] : null, vb = b < out.length ? out[b][v] : null;
+      let x = null;
+      if (v === "RAIN") x = 0;                         // a missing rain day is safest as dry
+      else if (va != null && vb != null) x = va + (vb - va) * (i - a) / (b - a);
+      else x = va != null ? va : vb;
+      if (x != null) { out[i][v] = x; filled[v]++; }
+    }
+  });
+  // keep TMIN <= TMAX after interpolation
+  out.forEach(d => { if (d.TMAX != null && d.TMIN != null && d.TMIN > d.TMAX) { const t = d.TMIN; d.TMIN = d.TMAX; d.TMAX = t; } });
+  return { days: out, trimmedHead: start, trimmedTail: days.length - end, filled };
+}
+
+// TAV = mean of the 12 calendar-month mean temperatures; AMP = warmest minus coolest month mean.
+function tavAmp(days) {
+  const sum = Array(12).fill(0), n = Array(12).fill(0);
+  days.forEach(d => {
+    if (d.TMAX == null || d.TMIN == null) return;
+    const m = d.date.getUTCMonth();
+    sum[m] += (d.TMAX + d.TMIN) / 2; n[m]++;
+  });
+  const means = sum.map((s, i) => n[i] ? s / n[i] : null).filter(x => x != null);
+  if (!means.length) return { tav: -99, amp: -99 };
+  const tav = means.reduce((a, b) => a + b, 0) / means.length;
+  const amp = Math.max(...means) - Math.min(...means);
+  return { tav, amp };
+}
+
+function doy(date) {
+  const start = Date.UTC(date.getUTCFullYear(), 0, 1);
+  return Math.floor((date - start) / 86400000) + 1;
+}
+
+const f = (x, w, dp) => (x == null || !isFinite(x) ? (-99).toFixed(dp) : x.toFixed(dp)).padStart(w);
+
+// Build one DSSAT .WTH text.
+function buildWth({ days, insi, siteName, lat, lon, elev, tav, amp, extraVars, dateDigits, refht = 2, wndht = 2 }) {
+  const cols = ["SRAD", "TMAX", "TMIN", "RAIN", ...extraVars];
+  const L = [];
+  L.push(`*WEATHER DATA : ${siteName}, NASA POWER (lat ${lat.toFixed(4)}, lon ${lon.toFixed(4)})`);
+  L.push("");
+  L.push("@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT");
+  L.push("  " + insi.padEnd(4).slice(0, 4) + f(lat, 9, 3) + f(lon, 9, 3) + f(elev, 6, 0) +
+         f(tav, 6, 1) + f(amp, 6, 1) + f(refht, 6, 1) + f(wndht, 6, 1));
+  const dateHdr = dateDigits === 7 ? "@  DATE" : "@DATE";
+  L.push(dateHdr + cols.map(c => c.padStart(6)).join(""));
+  days.forEach(d => {
+    const y = d.date.getUTCFullYear(), j = String(doy(d.date)).padStart(3, "0");
+    const ds = dateDigits === 7 ? `${y}${j}` : `${String(y % 100).padStart(2, "0")}${j}`;
+    L.push(ds + cols.map(c => f(d[c], 6, 1)).join(""));
+  });
+  return L.join("\r\n") + "\r\n";   // DSSAT is happiest with CRLF line endings
+}
+
+// DSSAT file name: INSI + YY (first year) + NN (number of years) + .WTH
+function wthName(insi, firstYear, nYears) {
+  return `${insi.padEnd(4, "X").slice(0, 4)}${String(firstYear % 100).padStart(2, "0")}${String(nYears).padStart(2, "0")}.WTH`;
+}
+
+function makeFiles({ days, split, ...meta }) {
+  if (!days.length) return [];
+  if (split === "single") {
+    const y0 = days[0].date.getUTCFullYear(), y1 = days[days.length - 1].date.getUTCFullYear();
+    return [{ name: wthName(meta.insi, y0, Math.min(99, y1 - y0 + 1)), text: buildWth({ days, ...meta }) }];
+  }
+  const byYear = new Map();
+  days.forEach(d => { const y = d.date.getUTCFullYear(); if (!byYear.has(y)) byYear.set(y, []); byYear.get(y).push(d); });
+  return [...byYear.entries()].map(([y, ds]) => ({ name: wthName(meta.insi, y, 1), text: buildWth({ days: ds, ...meta }) }));
+}
+if (typeof module !== "undefined") module.exports = { parsePower, cleanDays, tavAmp, buildWth, makeFiles, wthName, countMissing, buildPowerUrl, doy };
+// ======================= CORE-END =======================
+</script>
+
+<script>
+(function () {
+  if (typeof document === "undefined") return;
+  const $ = id => document.getElementById(id);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  let raw = null, files = [], charts = [];
+
+  // ---------- map ----------
+  let map = null, marker = null;
+  function initMap() {
+    if (typeof L === "undefined") {
+      $("map").innerHTML = '<div class="hint" style="padding:12px">Map library could not load (offline or blocked). Type latitude/longitude instead.</div>';
+      return;
+    }
+    const lat = +$("lat").value, lon = +$("lon").value;
+    map = L.map("map", { attributionControl: true }).setView([lat, lon], 5);
+
+    // Basemaps that work when this page is opened as a local file.
+    // (OpenStreetMap's own tile servers refuse requests without a website Referer, which local files can't send.)
+    const esriAttr = "Tiles © Esri";
+    const bases = [
+      { name: "Streets", layer: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", { maxZoom: 18, attribution: esriAttr + " — Esri, HERE, Garmin, © OpenStreetMap contributors" }) },
+      { name: "Light (CARTO)", layer: L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom: 18, subdomains: "abcd", attribution: "© OpenStreetMap contributors © CARTO" }) },
+      { name: "Satellite", layer: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 18, attribution: esriAttr + " — Maxar, Earthstar Geographics" }) },
+      { name: "OpenStreetMap", layer: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap contributors" }) }
+    ];
+    const control = {}; bases.forEach(b => control[b.name] = b.layer);
+    L.control.layers(control, null, { position: "topright" }).addTo(map);
+
+    // Auto-fallback: if the current street basemap keeps failing, switch to the next one.
+    let current = 0, errors = 0, loaded = 0;
+    function useBase(i) {
+      bases.forEach(b => map.hasLayer(b.layer) && map.removeLayer(b.layer));
+      current = i; errors = 0; loaded = 0; bases[i].layer.addTo(map);
+    }
+    bases.forEach((b, i) => {
+      b.layer.on("tileload", () => { if (i === current) loaded++; });
+      b.layer.on("tileerror", () => {
+        if (i !== current || loaded > 0) return;
+        if (++errors >= 4) {
+          const next = [0, 1, 2].find(j => j > current);
+          if (next != null) useBase(next);
+          else $("mapNote").textContent = "Map tiles are blocked on this network. Type latitude/longitude instead — the data fetch still works.";
+        }
+      });
+    });
+    map.on("baselayerchange", e => { current = bases.findIndex(b => b.layer === e.layer); errors = 0; loaded = 0; });
+    useBase(0);
+
+    // Use a simple circle marker (no image files to load).
+    marker = L.circleMarker([lat, lon], { radius: 7, color: "#fff", weight: 2, fillColor: "#2f6b3a", fillOpacity: 1 }).addTo(map);
+    setTimeout(() => map.invalidateSize(), 200);
+    map.on("click", e => {
+      $("lat").value = e.latlng.lat.toFixed(4);
+      $("lon").value = (((e.latlng.lng + 180) % 360 + 360) % 360 - 180).toFixed(4);
+      syncMarker(false);
+    });
+  }
+  function syncMarker(pan = true) {
+    const lat = +$("lat").value, lon = +$("lon").value;
+    if (marker && isFinite(lat) && isFinite(lon)) { marker.setLatLng([lat, lon]); if (pan) map.panTo([lat, lon]); }
+    updateApiLink();
+  }
+  function updateApiLink() {
+    const lat = +$("lat").value, lon = +$("lon").value;
+    if (isFinite(lat) && isFinite(lon)) $("apiLink").href = buildPowerUrl(lat, lon, $("start").value, $("end").value);
+  }
+  ["lat", "lon"].forEach(id => $(id).addEventListener("change", () => syncMarker(true)));
+  ["start", "end"].forEach(id => $(id).addEventListener("change", updateApiLink));
+
+  function status(msg, kind = "info") { const s = $("status"); s.className = "status " + kind; s.textContent = msg; }
+
+  function validate() {
+    const lat = +$("lat").value, lon = +$("lon").value, s = $("start").value, e = $("end").value;
+    if (!(lat >= -90 && lat <= 90)) return "Latitude must be between −90 and 90.";
+    if (!(lon >= -180 && lon <= 180)) return "Longitude must be between −180 and 180.";
+    if (!s || !e || s > e) return "Choose a start date on or before the end date.";
+    if (s < "1981-01-01") return "NASA POWER daily data start on 1981-01-01.";
+    if (!/^[A-Za-z0-9]{4}$/.test($("insi").value)) return "Station code must be exactly 4 letters/digits (e.g. NASA, UFGA).";
+    return null;
+  }
+
+  // ---------- fetch ----------
+  $("go").addEventListener("click", async () => {
+    const err = validate(); if (err) return status(err, "err");
+    const lat = +$("lat").value, lon = +$("lon").value;
+    const url = buildPowerUrl(lat, lon, $("start").value, $("end").value);
+    $("go").disabled = true; status("Requesting data from NASA POWER… long periods can take 10–30 s.");
+    try {
+      const r = await fetch(url);
+      const body = await r.json().catch(() => null);
+      if (!r.ok) {
+        const msg = body && (body.messages || body.message || body.detail);
+        throw new Error(`POWER returned HTTP ${r.status}${msg ? ": " + JSON.stringify(msg) : ""}`);
+      }
+      handleJson(body);
+    } catch (e) {
+      status((e.message || String(e)) + " — if this is a network/CORS block, use the fallback below (open the API URL, save the JSON, load it).", "err");
+    } finally { $("go").disabled = false; }
+  });
+
+  $("jsonFile").addEventListener("change", async ev => {
+    const file = ev.target.files[0]; if (!file) return;
+    try { handleJson(JSON.parse(await file.text())); }
+    catch (e) { status("Could not read that file: " + e.message, "err"); }
+  });
+
+  function handleJson(json) {
+    raw = parsePower(json);
+    if (raw.lat != null && raw.lon != null) { $("lat").value = (+raw.lat).toFixed(4); $("lon").value = (+raw.lon).toFixed(4); syncMarker(true); }
+    regenerate();
+  }
+
+  // re-render when output options change (no refetch needed)
+  ["insi", "split", "datefmt", "gaps", "cDEWP", "cWIND", "cRHUM", "siteName"].forEach(id =>
+    $(id).addEventListener("change", () => raw && regenerate()));
+
+  function regenerate() {
+    const extra = ["DEWP", "WIND", "RHUM"].filter(v => $("c" + v).checked);
+    const vars = [...VARS_REQ, ...extra];
+    const missingBefore = countMissing(raw.days, vars);
+    let days = raw.days, cleanInfo = null;
+    if ($("gaps").value === "fill") { cleanInfo = cleanDays(raw.days, vars); days = cleanInfo.days; }
+    if (!days.length) return status("No usable days in that period (required variables all missing). Try an earlier end date.", "err");
+    const { tav, amp } = tavAmp(days);
+    const insi = $("insi").value.toUpperCase();
+    files = makeFiles({
+      days, split: $("split").value, insi, siteName: $("siteName").value || "Site",
+      lat: +$("lat").value, lon: +$("lon").value, elev: raw.elev ?? -99, tav, amp,
+      extraVars: extra, dateDigits: +$("datefmt").value
+    });
+
+    renderTiles(days, tav, amp);
+    renderCharts(days);
+    renderChecks(vars, missingBefore, cleanInfo, days);
+    renderFiles();
+    $("emptyState").style.display = "none"; $("results").style.display = "block";
+    const missingReq = VARS_REQ.reduce((n, v) => n + countMissing(days, [v])[v], 0);
+    if (missingReq && $("gaps").value === "keep")
+      status(`Done, but ${missingReq} required values are −99. DSSAT will stop on missing SRAD/TMAX/TMIN/RAIN — switch “Missing values” to interpolate.`, "warn");
+    else status(`Done — ${days.length.toLocaleString()} days, ${files.length} file${files.length > 1 ? "s" : ""} ready.`, "ok");
+  }
+
+  // ---------- tiles ----------
+  function renderTiles(days, tav, amp) {
+    const nYears = days.length / 365.25;
+    const rainTot = days.reduce((s, d) => s + (d.RAIN || 0), 0);
+    const mean = v => { const xs = days.map(d => d[v]).filter(x => x != null); return xs.reduce((a, b) => a + b, 0) / xs.length; };
+    const t = [
+      ["Elevation", raw.elev != null ? Math.round(raw.elev) : "—", "m"],
+      ["Days", days.length.toLocaleString(), ""],
+      ["TAV", tav.toFixed(1), "°C"],
+      ["AMP", amp.toFixed(1), "°C"],
+      ["Mean SRAD", mean("SRAD").toFixed(1), "MJ/m²/d"],
+      ["Rain / year", Math.round(rainTot / nYears).toLocaleString(), "mm"]
+    ];
+    $("tiles").innerHTML = t.map(([k, v, u]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}<span class="u">${u}</span></div></div>`).join("");
+  }
+
+  // ---------- charts ----------
+  function aggregate(days) {
+    // ≤ 3 years: daily. Longer: monthly (mean temps/SRAD, total rain).
+    if (days.length <= 1100) return { mode: "daily", rows: days.map(d => ({ label: d.date.toISOString().slice(0, 10), ...d })) };
+    const m = new Map();
+    days.forEach(d => {
+      const key = d.date.toISOString().slice(0, 7);
+      if (!m.has(key)) m.set(key, { label: key, n: 0, TMAX: 0, TMIN: 0, SRAD: 0, RAIN: 0, nT: 0, nS: 0 });
+      const r = m.get(key); r.n++;
+      if (d.TMAX != null && d.TMIN != null) { r.TMAX += d.TMAX; r.TMIN += d.TMIN; r.nT++; }
+      if (d.SRAD != null) { r.SRAD += d.SRAD; r.nS++; }
+      r.RAIN += d.RAIN || 0;
+    });
+    return { mode: "monthly", rows: [...m.values()].map(r => ({ label: r.label, TMAX: r.nT ? r.TMAX / r.nT : null, TMIN: r.nT ? r.TMIN / r.nT : null, SRAD: r.nS ? r.SRAD / r.nS : null, RAIN: r.RAIN })) };
+  }
+
+  function renderCharts(days) {
+    charts.forEach(c => c.destroy()); charts = [];
+    if (typeof Chart === "undefined") { document.querySelectorAll(".chartbox").forEach(b => b.innerHTML = '<div class="hint">Charts need an internet connection to load Chart.js.</div>'); return; }
+    const { mode, rows } = aggregate(days);
+    const labels = rows.map(r => r.label);
+    const grid = css("--border"), ink = css("--text2");
+    const base = (yTitle) => ({
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y == null ? "—" : c.parsed.y.toFixed(1)}` } } },
+      scales: {
+        x: { ticks: { color: ink, maxTicksLimit: 10, autoSkip: true, maxRotation: 0 }, grid: { display: false } },
+        y: { title: { display: true, text: yTitle, color: ink }, ticks: { color: ink }, grid: { color: grid } }
+      },
+      elements: { point: { radius: 0, hoverRadius: 4 }, line: { borderWidth: mode === "daily" ? 1.25 : 2 } }
+    });
+    const per = mode === "daily" ? "Daily values" : "Monthly means (daily view for periods ≤ 3 years)";
+    $("tSub").textContent = per;
+    $("sSub").textContent = per;
+    $("rSub").textContent = mode === "daily" ? "Daily totals" : "Monthly totals";
+    charts.push(new Chart($("chT"), { type: "line", data: { labels, datasets: [
+      { label: "TMAX (°C)", data: rows.map(r => r.TMAX), borderColor: css("--tmax"), backgroundColor: css("--tmax") },
+      { label: "TMIN (°C)", data: rows.map(r => r.TMIN), borderColor: css("--tmin"), backgroundColor: css("--tmin") }] }, options: base("°C") }));
+    charts.push(new Chart($("chR"), { type: "bar", data: { labels, datasets: [
+      { label: "RAIN (mm)", data: rows.map(r => r.RAIN), backgroundColor: css("--rain"), borderRadius: 2, barPercentage: 1, categoryPercentage: .85 }] }, options: base("mm") }));
+    charts.push(new Chart($("chS"), { type: "line", data: { labels, datasets: [
+      { label: "SRAD (MJ/m²/d)", data: rows.map(r => r.SRAD), borderColor: css("--srad"), backgroundColor: css("--srad") }] }, options: base("MJ/m²/day") }));
+  }
+
+  // ---------- checks ----------
+  function renderChecks(vars, missingBefore, cleanInfo, days) {
+    const units = { SRAD: "MJ/m²/d", TMAX: "°C", TMIN: "°C", RAIN: "mm/d", DEWP: "°C", WIND: "km/d", RHUM: "%" };
+    const src = { SRAD: "ALLSKY_SFC_SW_DWN", TMAX: "T2M_MAX", TMIN: "T2M_MIN", RAIN: "PRECTOTCORR", DEWP: "T2MDEW", WIND: "WS2M × 86.4", RHUM: "RH2M" };
+    const rng = v => { const xs = days.map(d => d[v]).filter(x => x != null); return xs.length ? `${Math.min(...xs).toFixed(1)} – ${Math.max(...xs).toFixed(1)}` : "—"; };
+    let html = `<table class="miss"><tr><th>DSSAT</th><th>POWER parameter</th><th>Units</th><th>Missing (raw)</th><th>Filled</th><th>Range in file</th></tr>`;
+    vars.forEach(v => {
+      html += `<tr><td><b>${v}</b></td><td>${src[v]}</td><td>${units[v]}</td><td>${missingBefore[v]}</td><td>${cleanInfo ? cleanInfo.filled[v] : "—"}</td><td>${rng(v)}</td></tr>`;
+    });
+    html += "</table>";
+    if (cleanInfo && (cleanInfo.trimmedTail || cleanInfo.trimmedHead)) {
+      const last = days[days.length - 1].date.toISOString().slice(0, 10);
+      html += `<p class="hint" style="margin-top:8px">Trimmed ${cleanInfo.trimmedTail} day(s) from the end${cleanInfo.trimmedHead ? ` and ${cleanInfo.trimmedHead} from the start` : ""} where SRAD/TMAX/TMIN/RAIN were not yet available. File now ends ${last}.</p>`;
+    }
+    html += `<p class="hint">Missing rain days are filled as 0 mm; other gaps are linearly interpolated. REFHT = 2 m, WNDHT = 2 m (wind from WS2M).</p>`;
+    $("checks").innerHTML = html;
+  }
+
+  // ---------- files ----------
+  function renderFiles() {
+    $("filePick").innerHTML = files.map((fl, i) => `<option value="${i}">${fl.name}</option>`).join("");
+    $("dlAll").style.display = files.length > 1 ? "" : "none";
+    showFile(0);
+  }
+  function showFile(i) {
+    const fl = files[i]; if (!fl) return;
+    const lines = fl.text.split("\r\n");
+    $("preview").textContent = lines.length > 60 ? lines.slice(0, 60).join("\n") + `\n… (${lines.length - 61} more lines)` : lines.join("\n");
+  }
+  $("filePick").addEventListener("change", e => showFile(+e.target.value));
+
+  function saveBlob(blob, name) {
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }
+  $("dlOne").addEventListener("click", () => { const fl = files[+$("filePick").value]; if (fl) saveBlob(new Blob([fl.text], { type: "text/plain" }), fl.name); });
+  $("dlAll").addEventListener("click", async () => {
+    if (typeof JSZip === "undefined") return status("ZIP library didn't load (offline?). Download files one at a time instead.", "warn");
+    const zip = new JSZip(); files.forEach(fl => zip.file(fl.name, fl.text));
+    const insi = $("insi").value.toUpperCase();
+    saveBlob(await zip.generateAsync({ type: "blob" }), `${insi}_DSSAT_weather.zip`);
+  });
+  $("copyBtn").addEventListener("click", async () => {
+    const fl = files[+$("filePick").value]; if (!fl) return;
+    try { await navigator.clipboard.writeText(fl.text); $("copyBtn").textContent = "Copied"; setTimeout(() => $("copyBtn").textContent = "Copy text", 1500); }
+    catch { status("Clipboard not available — use Download instead.", "warn"); }
+  });
+
+  initMap(); updateApiLink();
+})();
+</script>
+</body>
+</html>
